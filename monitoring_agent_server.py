@@ -30,7 +30,7 @@ to create tickets.
 @monitoring_server.tool()
 async def fetch_cloudwatch_logs(
     service_name: str,
-    days: int = 2,
+    days: int = 30,
     max_logs: int = 100,
     filter_pattern: str = ""
 ) -> Dict:
@@ -122,30 +122,6 @@ async def fetch_cloudwatch_logs(
     
     except Exception as e:
         return {"error": f"Error fetching CloudWatch logs: {str(e)}"}
-
-@monitoring_server.tool()
-async def list_available_services() -> List[str]:
-    """
-    Lists available services that have CloudWatch log groups.
-    
-    Returns:
-        List of service names that have associated CloudWatch log groups
-    """
-    try:
-        log_groups_response = cloudwatch_logs_client.describe_log_groups(limit=100)
-        log_groups = log_groups_response.get('logGroups', [])
-        
-        # Extract service names from log group names
-        services = set()
-        for log_group in log_groups:
-            parts = log_group['logGroupName'].split('/')
-            if len(parts) > 1 and parts[1]:
-                services.add(parts[1])
-        
-        return sorted(list(services))
-    
-    except Exception as e:
-        return [f"Error listing services: {str(e)}"]
 
 @monitoring_server.resource("cloudwatch://alarms")
 async def get_cloudwatch_alarms() -> str:
