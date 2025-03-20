@@ -17,6 +17,22 @@ from mcp import ClientSession, StdioServerParameters
 # Global variables
 CLAUDE_3_5_SONNET: str = 'us.anthropic.claude-3-sonnet-20240229-v1:0'
 
+prompt_response: str = """You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services.
+    Your tasks include:
+    1. Fetch recent CloudWatch logs for the requested service.
+    2. Identify any errors, warnings, or anomalies in the logs.
+    3. Look for patterns or recurring issues.
+    4. Provide a summary of log findings and any potential actions needed.
+    5. Report your findings to the user in a clear, organized manner.
+    
+    First, you may need to list available services to help the user choose which service logs to analyze.
+    Then, fetch and analyze the logs for their chosen service for the specified time period.
+    Be thorough in your investigation but concise in your reporting.
+    
+    Always fetch the cloudwatch logs on a certain service, then get the logs and then fetch 
+    any relevant alarms.
+        """
+
 class MCPClient:
     def __init__(self):
         # Initialize session and client objects
@@ -80,7 +96,11 @@ class MCPClient:
             )
             print(f"Initialized the AWS Incident REACT agent...")
             # Invoke the agent
-            response = await agent.ainvoke({"messages": query})
+            formatted_messages = [
+                {"role": "system", "content": prompt_response},
+                {"role": "user", "content": query}
+            ]
+            response = await agent.ainvoke({"messages": formatted_messages})
             
             # Process the response
             if response and "messages" in response and response["messages"]:
