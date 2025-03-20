@@ -5,6 +5,7 @@ from typing import Optional, Dict, List
 from contextlib import AsyncExitStack
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_aws import ChatBedrock
 import sys
 import json
@@ -21,23 +22,16 @@ class MCPClient:
         # Initialize session and client objects
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
-        self.tools = []
+        self.tools = None
         
-    async def connect_to_server(self, server_script_path: str):
+    async def connect_to_server(self):
         """Connect to an MCP server
         Args:
             server_script_path: Path to the server script (.py or .js)
         """
-        is_python = server_script_path.endswith('.py')
-        is_js = server_script_path.endswith('.js')
-        if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
-
-        command = "python" if is_python else "node"
         server_params = StdioServerParameters(
-            command=command,
-            args=[server_script_path],
-            env=None
+            command="python",
+            args=["monitoring_agent_server.py"]
         )
 
         stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
@@ -46,14 +40,14 @@ class MCPClient:
 
         # initialize the MCP server
         await self.session.initialize()
+        print(f"Connected to the AWS MCP Incident server")
         # Here, we can fetch the session and then get the prompt within the "analyze_aws_logs" prompt tool
         # within the server. This can help us abstract out the prompts and use pre built prompts within the MCP
         # server that will be used by default when the user asks a question
-        prompt_response = await self.session.get_prompt("analyze_aws_logs")
+        self.prompt_response = await self.session.get_prompt("analyze_aws_logs")
 
         # List available tools
-        response = await self.session.list_tools()
-        self.tools = response.tools
+        self.tools = await load_mcp_tools(self.session)
         print("Available tools:", [tool.name for tool in self.tools])
         
         # List available resources
@@ -73,24 +67,20 @@ class MCPClient:
             return "Error: Not connected to server. Please connect first."
         
         try:
-            # Create an MCP adapter that will bridge between MCP and LangGraph
-            mcp_adapter = MultiServerMCPClient({
-                "aws-monitoring": {
-                    "session": self.session
-                }
-            })
-            
             # Create a model instance
             model = ChatBedrock(model_id=CLAUDE_3_5_SONNET)
-            
             # Create a ReAct agent using the adapter itself
             agent = create_react_agent(
-                model=model,
-                tools=mcp_adapter.get_tools(),  # Get tools via the adapter
+                model,
+                # These are the tools that the monitoring agent has
+                # access to, which includes the fetch cloudwatch
+                # logs, list services and then fetch if there are any
+                # alarms in your AWS account
+                self.tools
             )
-            
+            print(f"Initialized the AWS Incident REACT agent...")
             # Invoke the agent
-            response = await agent.ainvoke({"messages": [{"role": "human", "content": query}]})
+            response = await agent.ainvoke({"messages": query})
             
             # Process the response
             if response and "messages" in response and response["messages"]:
@@ -107,16 +97,6 @@ class MCPClient:
             import traceback
             traceback.print_exc()
             return f"Error processing query: {str(e)}"
-
-    async def get_resource(self, uri: str) -> str:
-        """Fetch a resource from the server"""
-        if not self.session:
-            return "Error: Not connected to server. Please connect first."
-        try:
-            response = await self.session.get_resource(uri)
-            return f"Resource {uri}: {response.content}"
-        except Exception as e:
-            return f"Error fetching resource {uri}: {str(e)}"
 
     async def chat_loop(self):
         """Run an interactive chat loop"""
@@ -141,13 +121,9 @@ class MCPClient:
         await self.exit_stack.aclose()
 
 async def main():
-    if len(sys.argv) < 2:
-        print("Usage: python client.py <path_to_server_script>")
-        sys.exit(1)
-
     client = MCPClient()
     try:
-        await client.connect_to_server(sys.argv[1])
+        await client.connect_to_server()
         await client.chat_loop()
     except Exception as e:
         print(f"Error: {str(e)}")
