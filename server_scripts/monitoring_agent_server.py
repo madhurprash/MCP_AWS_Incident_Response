@@ -1,4 +1,5 @@
 # monitoring_server.py
+import json
 import boto3
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
@@ -166,6 +167,33 @@ def fetch_cloudwatch_logs_for_service(
     except Exception as e:
         print(f"Error fetching logs for service {service_name}: {e}")
         return {"status": "error", "message": str(e)}
+    
+@monitoring_server.tool()
+def list_cloudwatch_dashboards() -> Dict[str, Any]:
+    """
+    Lists all CloudWatch dashboards in the AWS account.
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the list of dashboard names and their ARNs.
+    """
+    try:
+        dashboards = []
+        paginator = cloudwatch_client.get_paginator('list_dashboards')
+        for page in paginator.paginate():
+            for entry in page.get('DashboardEntries', []):
+                dashboards.append({
+                    'DashboardName': entry.get('DashboardName'),
+                    'DashboardArn': entry.get('DashboardArn')
+                })
+
+        return {
+            'status': 'success',
+            'dashboard_count': len(dashboards),
+            'dashboards': dashboards
+        }
+
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}
 
 @monitoring_server.tool()
 def get_cloudwatch_alarms_for_service(service_name: str = None) -> Dict[str, Any]:
@@ -204,43 +232,92 @@ def get_cloudwatch_alarms_for_service(service_name: str = None) -> Dict[str, Any
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@monitoring_server.tool()
+def get_dashboard_summary(dashboard_name: str) -> Dict[str, Any]:
+    """
+    Retrieves and summarizes the configuration of a specified CloudWatch dashboard.
+
+    Args:
+        dashboard_name (str): The name of the CloudWatch dashboard.
+
+    Returns:
+        Dict[str, Any]: A summary of the dashboard's widgets and their configurations.
+    """
+    try:
+        # Fetch the dashboard configuration
+        response = cloudwatch_client.get_dashboard(DashboardName=dashboard_name)
+        dashboard_body = response.get('DashboardBody', '{}')
+        dashboard_config = json.loads(dashboard_body)
+
+        # Summarize the widgets in the dashboard
+        widgets_summary = []
+        for widget in dashboard_config.get('widgets', []):
+            widget_summary = {
+                'type': widget.get('type'),
+                'x': widget.get('x'),
+                'y': widget.get('y'),
+                'width': widget.get('width'),
+                'height': widget.get('height'),
+                'properties': widget.get('properties', {})
+            }
+            widgets_summary.append(widget_summary)
+
+        return {
+            'dashboard_name': dashboard_name,
+            'widgets_count': len(widgets_summary),
+            'widgets_summary': widgets_summary
+        }
+
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}
+
 @monitoring_server.prompt()
 def analyze_aws_logs() -> str:
-    """Prompt to analyze AWS CloudWatch logs"""
+    """Prompt to analyze AWS resources, including CloudWatch logs, alarms, and dashboards."""
     return """
-    You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services.
-    Your tasks include:
-    1. Fetch recent CloudWatch logs for the requested service.
-    2. Identify any errors, warnings, or anomalies in the logs.
-    3. Look for patterns or recurring issues.
-    4. Provide a summary of log findings and any potential actions needed.
-    5. Report your findings to the user in a clear, organized manner.
-    
-    When a user asks about any of these services, use the exact service name in brackets:
-    - EC2/compute instances [ec2]
-    - Lambda functions [lambda]
-    - RDS databases [rds]
-    - EKS Kubernetes [eks]
-    - API Gateway [apigateway]
-    - CloudTrail [cloudtrail]
-    - S3 storage [s3]
-    - VPC networking [vpc]
-    - WAF web security [waf]
-    - Bedrock AI [bedrock]
-    - IAM logs [iam] - When users ask about security logs or events, always use this option and in the same way, always use
-    the service that the user provides as the service name parameter first.
-    
-    First, briefly explain the available services, then fetch the logs for the appropriate service for the specified time period.
-    Be thorough in your investigation but concise in your reporting.
-    
-    Always fetch logs first and then relevant alarms if needed.
-    
-    If the user asks about CloudWatch alarms:
-    1. Always use the get_cloudwatch_alarms_for_service tool 
-    2. Use the specific service name as parameter if provided
-    3. Report alarm status and details to the user
-    
-    Never make up your own analysis. Only create an analysis report from what you see in the logs.
+    You are the monitoring agent responsible for analyzing AWS resources, including CloudWatch logs, alarms, and dashboards. Your tasks include:
+
+    1. **List Available CloudWatch Dashboards:**
+       - Utilize the `list_cloudwatch_dashboards` tool to retrieve a list of all CloudWatch dashboards in the AWS account.
+       - Provide the user with the names and descriptions of these dashboards, offering a brief overview of their purpose and contents.
+
+    2. **Fetch Recent CloudWatch Logs for Requested Services:**
+       - When a user specifies a service (e.g., EC2, Lambda, RDS), use the `fetch_cloudwatch_logs_for_service` tool to retrieve the most recent logs for that service.
+       - Analyze these logs to identify any errors, warnings, or anomalies.
+       - Summarize your findings, highlighting any patterns or recurring issues, and suggest potential actions or resolutions.
+
+    3. **Retrieve and Summarize CloudWatch Alarms:**
+       - If the user inquires about alarms or if log analysis indicates potential issues, use the `get_cloudwatch_alarms_for_service` tool to fetch relevant alarms.
+       - Provide details about active alarms, including their state, associated metrics, and any triggered thresholds.
+       - Offer recommendations based on the alarm statuses and suggest possible remediation steps.
+
+    4. **Analyze Specific CloudWatch Dashboards:**
+       - When a user requests information about a particular dashboard, use the `get_dashboard_summary` tool to retrieve and summarize its configuration.
+       - Detail the widgets present on the dashboard, their types, and the metrics or logs they display.
+       - Provide insights into the dashboard's focus areas and how it can be utilized for monitoring specific aspects of the AWS environment.
+
+    **Guidelines:**
+
+    - Always begin by listing the available CloudWatch dashboards to inform the user of existing monitoring setups.
+    - When analyzing logs or alarms, be thorough yet concise, ensuring clarity in your reporting.
+    - Avoid making assumptions; base your analysis strictly on the data retrieved from AWS tools.
+    - Clearly explain the available AWS services and their monitoring capabilities when prompted by the user.
+
+    **Available AWS Services for Monitoring:**
+
+    - **EC2/Compute Instances** [ec2]
+    - **Lambda Functions** [lambda]
+    - **RDS Databases** [rds]
+    - **EKS Kubernetes** [eks]
+    - **API Gateway** [apigateway]
+    - **CloudTrail** [cloudtrail]
+    - **S3 Storage** [s3]
+    - **VPC Networking** [vpc]
+    - **WAF Web Security** [waf]
+    - **Bedrock AI** [bedrock]
+    - **IAM Logs** [iam] (Use this option when users inquire about security logs or events.)
+
+    Your role is to assist users in monitoring and analyzing their AWS resources effectively, providing actionable insights based on the data available.
     """
 
 if __name__ == "__main__":

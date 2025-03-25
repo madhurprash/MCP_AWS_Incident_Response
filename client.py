@@ -20,51 +20,38 @@ class MCPClient:
         self.tools = None
         self.system_prompt = None
         
-    async def connect_to_servers(self):
-        """Connect to MCP servers"""
-        server_configs = {
-            "monitoring": {
-                "command": "python",
-                "args": [MONTITORING_SCRIPT_PATH],
-                "transport": "stdio"
-            },
-            "diagnosis": {
-                "command": "python",
-                "args": [DIAGNOSIS_SCRIPT_PATH],
-                "transport": "stdio"
-            }
-        }
+    async def connect_to_server(self):
+        """Connect to an MCP server"""
+        server_params = StdioServerParameters(
+            command="python",
+            args=[MONTITORING_SCRIPT_PATH]
+        )
 
-        # Connect to multiple servers
-        self.multi_client = await self.exit_stack.enter_async_context(MultiServerMCPClient(server_configs))
-        print("Connected to multiple MCP servers")
-        # Get monitoring server prompt
-        try:
-            prompt_response = await self.multi_client.servers["monitoring"].get_prompt("analyze_aws_logs")
-            if hasattr(prompt_response, 'messages') and prompt_response.messages:
-                self.monitoring_prompt = prompt_response.messages[0].content.text
-                print(f"Monitoring system prompt loaded")
-            else:
-                self.monitoring_prompt = "You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services."
-        except Exception as e:
-            print(f"Error extracting monitoring prompt: {e}")
-            self.monitoring_prompt = "You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services."
+        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
+        self.stdio, self.write = stdio_transport
+        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
 
-        # Get diagnosis server prompt
+        # initialize the MCP server
+        await self.session.initialize()
+        print(f"Connected to the AWS MCP Incident server")
+        
         try:
-            prompt_response = await self.multi_client.servers["diagnosis"].get_prompt("diagnose_security_issues")
-            if hasattr(prompt_response, 'messages') and prompt_response.messages:
-                self.diagnosis_prompt = prompt_response.messages[0].content.text
-                print(f"Diagnosis system prompt loaded")
-            else:
-                self.diagnosis_prompt = "You are a specialized AWS security diagnosis agent."
-        except Exception as e:
-            print(f"Error extracting diagnosis prompt: {e}")
-            self.diagnosis_prompt = "You are a specialized AWS security diagnosis agent."
+            # Get the prompt response
+            self.prompt_response = await self.session.get_prompt("analyze_aws_logs")
             
-        # Load all tools from both servers
-        self.tools = self.multi_client.get_tools()
-        print(f"Available tools: {[tool.name for tool in self.tools]}")
+            # Extract the text directly from the structure we can see in the output
+            if hasattr(self.prompt_response, 'messages') and self.prompt_response.messages:
+                # Access the text field directly from the content object
+                self.system_prompt = self.prompt_response.messages[0].content.text
+                print(f"System prompt: {self.system_prompt}")
+            else:
+                # Fallback if structure is different
+                self.system_prompt = """
+                You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services.
+                """
+        except Exception as e:
+            print(f"Error extracting prompt: {e}")
+            raise e
             
         # List available tools
         self.tools = await load_mcp_tools(self.session)
