@@ -1,37 +1,16 @@
-# client.py
 import os
-import asyncio
-from typing import Optional, Dict, List
-from contextlib import AsyncExitStack
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_aws import ChatBedrock
 import sys
 import json
-
+import asyncio
+from globals import *
+from contextlib import AsyncExitStack
+from langchain_aws import ChatBedrock
+from typing import Optional, Dict, List
 from mcp.client.stdio import stdio_client
+from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp import ClientSession, StdioServerParameters
-
-
-# Global variables
-CLAUDE_3_5_SONNET: str = 'us.anthropic.claude-3-sonnet-20240229-v1:0'
-
-prompt_response: str = """You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services.
-    Your tasks include:
-    1. Fetch recent CloudWatch logs for the requested service.
-    2. Identify any errors, warnings, or anomalies in the logs.
-    3. Look for patterns or recurring issues.
-    4. Provide a summary of log findings and any potential actions needed.
-    5. Report your findings to the user in a clear, organized manner.
-    
-    First, you may need to list available services to help the user choose which service logs to analyze.
-    Then, fetch and analyze the logs for their chosen service for the specified time period.
-    Be thorough in your investigation but concise in your reporting.
-    
-    Always fetch the cloudwatch logs on a certain service, then get the logs and then fetch 
-    any relevant alarms.
-        """
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 class MCPClient:
     def __init__(self):
@@ -39,29 +18,54 @@ class MCPClient:
         self.session: Optional[ClientSession] = None
         self.exit_stack = AsyncExitStack()
         self.tools = None
+        self.system_prompt = None
         
-    async def connect_to_server(self):
-        """Connect to an MCP server
-        Args:
-            server_script_path: Path to the server script (.py or .js)
-        """
-        server_params = StdioServerParameters(
-            command="python",
-            args=["monitoring_agent_server.py"]
-        )
+    async def connect_to_servers(self):
+        """Connect to MCP servers"""
+        server_configs = {
+            "monitoring": {
+                "command": "python",
+                "args": [MONTITORING_SCRIPT_PATH],
+                "transport": "stdio"
+            },
+            "diagnosis": {
+                "command": "python",
+                "args": [DIAGNOSIS_SCRIPT_PATH],
+                "transport": "stdio"
+            }
+        }
 
-        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-        self.stdio, self.write = stdio_transport
-        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
+        # Connect to multiple servers
+        self.multi_client = await self.exit_stack.enter_async_context(MultiServerMCPClient(server_configs))
+        print("Connected to multiple MCP servers")
+        # Get monitoring server prompt
+        try:
+            prompt_response = await self.multi_client.servers["monitoring"].get_prompt("analyze_aws_logs")
+            if hasattr(prompt_response, 'messages') and prompt_response.messages:
+                self.monitoring_prompt = prompt_response.messages[0].content.text
+                print(f"Monitoring system prompt loaded")
+            else:
+                self.monitoring_prompt = "You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services."
+        except Exception as e:
+            print(f"Error extracting monitoring prompt: {e}")
+            self.monitoring_prompt = "You are the monitoring agent responsible for analyzing CloudWatch logs for AWS services."
 
-        # initialize the MCP server
-        await self.session.initialize()
-        print(f"Connected to the AWS MCP Incident server")
-        # Here, we can fetch the session and then get the prompt within the "analyze_aws_logs" prompt tool
-        # within the server. This can help us abstract out the prompts and use pre built prompts within the MCP
-        # server that will be used by default when the user asks a question
-        self.prompt_response = await self.session.get_prompt("analyze_aws_logs")
-
+        # Get diagnosis server prompt
+        try:
+            prompt_response = await self.multi_client.servers["diagnosis"].get_prompt("diagnose_security_issues")
+            if hasattr(prompt_response, 'messages') and prompt_response.messages:
+                self.diagnosis_prompt = prompt_response.messages[0].content.text
+                print(f"Diagnosis system prompt loaded")
+            else:
+                self.diagnosis_prompt = "You are a specialized AWS security diagnosis agent."
+        except Exception as e:
+            print(f"Error extracting diagnosis prompt: {e}")
+            self.diagnosis_prompt = "You are a specialized AWS security diagnosis agent."
+            
+        # Load all tools from both servers
+        self.tools = self.multi_client.get_tools()
+        print(f"Available tools: {[tool.name for tool in self.tools]}")
+            
         # List available tools
         self.tools = await load_mcp_tools(self.session)
         print("Available tools:", [tool.name for tool in self.tools])
@@ -70,8 +74,6 @@ class MCPClient:
         try:
             resources_response = await self.session.list_resources()
             self.resources = resources_response.resources
-            # Show the available resources that the user can ask questions on and get cloudwatch logs, 
-            # and then analyze problems, diagnose it and then create JIRA tickets to resolve the issues
             print("Available resources:", [resource.uri for resource in self.resources])
         except Exception as e:
             print(f"No resources available or error listing resources: {e}")
@@ -82,26 +84,26 @@ class MCPClient:
         if not self.session:
             return "Error: Not connected to server. Please connect first."
         
+        if not self.system_prompt:
+            return "Error: System prompt not available."
+        
         try:
             # Create a model instance
-            model = ChatBedrock(model_id=CLAUDE_3_5_SONNET)
+            model = ChatBedrock(model_id=CLAUDE_3_5_HAIKU)
+            
             # Create a ReAct agent using the adapter itself
             agent = create_react_agent(
                 model,
-                # These are the tools that the monitoring agent has
-                # access to, which includes the fetch cloudwatch
-                # logs, list services and then fetch if there are any
-                # alarms in your AWS account
                 self.tools
             )
             print(f"Initialized the AWS Incident REACT agent...")
-            # Invoke the agent
             formatted_messages = [
-                {"role": "system", "content": prompt_response},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": query}
             ]
+            print(f"Formatted messages: {formatted_messages}")
             response = await agent.ainvoke({"messages": formatted_messages})
-            
+            print(f"Response: {response}")
             # Process the response
             if response and "messages" in response and response["messages"]:
                 last_message = response["messages"][-1]
