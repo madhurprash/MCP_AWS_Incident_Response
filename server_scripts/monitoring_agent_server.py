@@ -1,4 +1,5 @@
 # monitoring_server.py
+import os
 import json
 import boto3
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ xray_client = boto3.client('xray')
 autoscaling_client = boto3.client('autoscaling')
 ec2_client = boto3.client('ec2')
 health_client = boto3.client('health')
+BEDROCK_LOG_GROUP = os.environ.get("BEDROCK_LOG_GROUP", "bedrockloggroup")
 
 """
 This file contains the server information for enabling our application
@@ -62,7 +64,7 @@ def fetch_cloudwatch_logs_for_service(
         "s3": ["/aws/s3", "/aws/s3-access"],
         "vpc": ["/aws/vpc"],
         "waf": ["/aws/waf"],
-        "bedrock": ["/bedrockInvocationlogs"],
+        "bedrock": [f"/aws/bedrock/modelinvocations"],
         "iam": ["/aws/dummy-security-logs"] 
         }
 
@@ -271,6 +273,198 @@ def get_dashboard_summary(dashboard_name: str) -> Dict[str, Any]:
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
+@monitoring_server.tool()
+def list_log_groups(prefix: str = "") -> Dict[str, Any]:
+    """
+    Lists all CloudWatch log groups, optionally filtered by a prefix.
+    
+    Args:
+        prefix (str, optional): Optional prefix to filter log groups
+        
+    Returns:
+        Dictionary with list of log groups and their details
+    """
+    try:
+        log_groups = []
+        paginator = logs_client.get_paginator('describe_log_groups')
+        
+        # Use the prefix if provided, otherwise get all log groups
+        if prefix:
+            pages = paginator.paginate(logGroupNamePrefix=prefix)
+        else:
+            pages = paginator.paginate()
+            
+        # Collect all log groups from paginated results
+        for page in pages:
+            for group in page.get('logGroups', []):
+                log_groups.append({
+                    'name': group.get('logGroupName'),
+                    'arn': group.get('arn'),
+                    'stored_bytes': group.get('storedBytes'),
+                    'creation_time': datetime.fromtimestamp(
+                        group.get('creationTime', 0) / 1000
+                    ).isoformat() if group.get('creationTime') else None,
+                    'retention_in_days': group.get('retentionInDays')
+                })
+        
+        # Sort log groups by name
+        log_groups.sort(key=lambda x: x['name'])
+        
+        return {
+            "status": "success",
+            "group_count": len(log_groups),
+            "log_groups": log_groups
+        }
+        
+    except Exception as e:
+        print(f"Error listing log groups: {e}")
+        return {"status": "error", "message": str(e)}
+
+@monitoring_server.tool()
+def analyze_log_group(
+    log_group_name: str,
+    days: int = 1,
+    max_events: int = 1000,
+    filter_pattern: str = ""
+) -> Dict[str, Any]:
+    """
+    Analyzes a specific CloudWatch log group and provides insights.
+    
+    Args:
+        log_group_name (str): The name of the log group to analyze
+        days (int): Number of days of logs to analyze (default: 1)
+        max_events (int): Maximum number of events to retrieve (default: 1000)
+        filter_pattern (str): Optional CloudWatch Logs filter pattern
+        
+    Returns:
+        Dictionary with analysis and insights about the log group
+    """
+    try:
+        # Calculate time range
+        end_time = datetime.utcnow()
+        start_time = end_time - timedelta(days=days)
+        
+        # Convert to milliseconds since epoch
+        start_time_ms = int(start_time.timestamp() * 1000)
+        end_time_ms = int(end_time.timestamp() * 1000)
+        
+        print(f"Analyzing log group: {log_group_name}")
+        print(f"Time range: {start_time.isoformat()} to {end_time.isoformat()}")
+        
+        # Get log streams
+        streams_response = logs_client.describe_log_streams(
+            logGroupName=log_group_name,
+            orderBy='LastEventTime',
+            descending=True,
+            limit=10  # Get the 10 most recent streams
+        )
+        streams = streams_response.get('logStreams', [])
+        
+        if not streams:
+            return {
+                "status": "info",
+                "message": f"No log streams found in log group: {log_group_name}"
+            }
+        
+        # Collect events from all streams
+        all_events = []
+        
+        # For each stream, get log events
+        for stream in streams:
+            stream_name = stream['logStreamName']
+            
+            # If filter pattern is provided, use filter_log_events
+            if filter_pattern:
+                filter_response = logs_client.filter_log_events(
+                    logGroupName=log_group_name,
+                    logStreamNames=[stream_name],
+                    startTime=start_time_ms,
+                    endTime=end_time_ms,
+                    filterPattern=filter_pattern,
+                    limit=max_events // len(streams)  # Divide limit among streams
+                )
+                events = filter_response.get('events', [])
+            else:
+                # Otherwise use get_log_events
+                log_response = logs_client.get_log_events(
+                    logGroupName=log_group_name,
+                    logStreamName=stream_name,
+                    startTime=start_time_ms,
+                    endTime=end_time_ms,
+                    limit=max_events // len(streams)
+                )
+                events = log_response.get('events', [])
+            
+            # Process and add events
+            for event in events:
+                # Convert timestamp to readable format
+                timestamp = datetime.fromtimestamp(event['timestamp'] / 1000)
+                formatted_event = {
+                    'timestamp': timestamp.isoformat(),
+                    'message': event['message'],
+                    'stream': stream_name
+                }
+                all_events.append(formatted_event)
+        
+        # Sort all events by timestamp (newest first)
+        all_events.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        # Analyze the events
+        insights = {
+            "event_count": len(all_events),
+            "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
+            "unique_streams": len(set(event['stream'] for event in all_events)),
+            "most_recent_event": all_events[0]['timestamp'] if all_events else None,
+            "oldest_event": all_events[-1]['timestamp'] if all_events else None,
+        }
+        
+        # Count error, warning, info level events
+        error_count = sum(1 for event in all_events if 'error' in event['message'].lower())
+        warning_count = sum(1 for event in all_events if 'warn' in event['message'].lower())
+        info_count = sum(1 for event in all_events if 'info' in event['message'].lower())
+        
+        insights["event_levels"] = {
+            "error": error_count,
+            "warning": warning_count,
+            "info": info_count,
+            "other": len(all_events) - error_count - warning_count - info_count
+        }
+        
+        # Group events by hour to see distribution
+        hour_distribution = {}
+        for event in all_events:
+            hour = event['timestamp'][:13]  # Format: YYYY-MM-DDTHH
+            hour_distribution[hour] = hour_distribution.get(hour, 0) + 1
+        
+        insights["hourly_distribution"] = hour_distribution
+        
+        # Find common patterns in log messages
+        # Extract first 5 words from each message as a pattern
+        patterns = {}
+        for event in all_events:
+            words = event['message'].split()
+            if len(words) >= 5:
+                pattern = ' '.join(words[:5])
+                patterns[pattern] = patterns.get(pattern, 0) + 1
+        
+        # Get top 10 patterns
+        top_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:10]
+        insights["common_patterns"] = [{"pattern": p, "count": c} for p, c in top_patterns]
+        
+        # Sample recent events
+        insights["sample_events"] = all_events[:20]  # First 20 events for reference
+        
+        return {
+            "status": "success",
+            "log_group": log_group_name,
+            "insights": insights
+        }
+        
+    except Exception as e:
+        print(f"Error analyzing log group {log_group_name}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @monitoring_server.prompt()
 def analyze_aws_logs() -> str:
     """Prompt to analyze AWS resources, including CloudWatch logs, alarms, and dashboards."""
@@ -295,6 +489,17 @@ def analyze_aws_logs() -> str:
        - When a user requests information about a particular dashboard, use the `get_dashboard_summary` tool to retrieve and summarize its configuration.
        - Detail the widgets present on the dashboard, their types, and the metrics or logs they display.
        - Provide insights into the dashboard's focus areas and how it can be utilized for monitoring specific aspects of the AWS environment.
+    
+    5. **List and Explore CloudWatch Log Groups:**
+   - Use the `list_log_groups` tool to retrieve all available CloudWatch log groups in the AWS account.
+   - Help the user navigate through these log groups and understand their purpose.
+   - When a user is interested in a specific log group, explain its contents and how to extract relevant information.
+   
+   6. **Analyze Specific Log Groups in Detail:**
+   - When a user wants to gain insights about a specific log group, use the `analyze_log_group` tool.
+   - Summarize key metrics like event count, error rates, and time distribution.
+   - Identify common patterns and potential issues based on log content.
+   - Provide actionable recommendations based on the observed patterns and error trends.
 
     **Guidelines:**
 
@@ -314,7 +519,7 @@ def analyze_aws_logs() -> str:
     - **S3 Storage** [s3]
     - **VPC Networking** [vpc]
     - **WAF Web Security** [waf]
-    - **Bedrock AI** [bedrock]
+    - **Bedrock** [bedrock/generative AI]
     - **IAM Logs** [iam] (Use this option when users inquire about security logs or events.)
 
     Your role is to assist users in monitoring and analyzing their AWS resources effectively, providing actionable insights based on the data available.

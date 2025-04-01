@@ -38,6 +38,10 @@ def parse_arguments():
     parser.add_argument('--model-id', type=str, default=CLAUDE_3_5_HAIKU,
                         help='Bedrock model ID')
     
+    parser.add_argument('--bedrock-log-group', type=str,
+                        default=os.environ.get('BEDROCK_LOG_GROUP', 'bedrockloggroup'),
+                        help='Bedrock log group')
+    
     # Python executable path
     parser.add_argument('--python-path', type=str,
                         default=sys.executable,
@@ -66,6 +70,7 @@ class MCPClient:
         os.environ['JIRA_INSTANCE_URL'] = args.jira_instance_url
         os.environ['JIRA_CLOUD'] = args.jira_cloud
         os.environ['PROJECT_KEY'] = args.project_key
+        os.environ['BEDROCK_LOG_GROUP'] = args.bedrock_log_group
         
         # Print startup information
         print(f"Using Python executable: {args.python_path}")
@@ -73,6 +78,7 @@ class MCPClient:
         print(f"  - Username: {args.jira_username}")
         print(f"  - Instance URL: {args.jira_instance_url}")
         print(f"  - Project Key: {args.project_key}")
+        print(f"  - Bedrock log group: {args.bedrock_log_group}")
         print(f"  - API Token: {'Configured' if args.jira_api_token else 'Not configured'}")
         
     async def connect_to_servers(self):
@@ -99,7 +105,8 @@ class MCPClient:
             'JIRA_USERNAME': self.args.jira_username,
             'JIRA_INSTANCE_URL': self.args.jira_instance_url,
             'JIRA_CLOUD': self.args.jira_cloud,
-            'PROJECT_KEY': self.args.project_key
+            'PROJECT_KEY': self.args.project_key,
+            'BEDROCK_LOG_GROUP': self.args.bedrock_log_group
         }
         
         jira_params = StdioServerParameters(
