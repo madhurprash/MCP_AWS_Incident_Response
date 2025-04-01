@@ -85,6 +85,12 @@ MCP_AWS_Incident_Response/
 
 ## Usage
 
+1. Export the environment variables:
+
+  ```bash
+  export JIRA_API_TOKEN="<your-jira-api-token" && export JIRA_USERNAME="<your-jira-username>" && export JIRA_INSTANCE_URL="<your-jira-instance-url>" && export JIRA_CLOUD="True" && export PROJECT_KEY="<jira-project-key>" && echo "Jira environment variables exported successfully"
+  ```
+
 1. Running with the Client: The simplest way to use the solution is through the provided client:
 
     ```bash
