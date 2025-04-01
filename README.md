@@ -64,7 +64,7 @@ MCP_AWS_Incident_Response/
 1. Clone this repository:
 
     ```bash
-        git clone https://github.com/madhurprash/MCP_AWS_Incident_Response.git
+        git clone https://github.com/madhurprash/AWS_CloudGuardMCP.git
         cd MCP_AWS_Incident_Response
     ```
 
