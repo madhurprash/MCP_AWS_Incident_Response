@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import asyncio
+import argparse
 from globals import *
 from contextlib import AsyncExitStack
 from langchain_aws import ChatBedrock
@@ -12,8 +13,41 @@ from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp import ClientSession, StdioServerParameters
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+def parse_arguments():
+    """Parse command line arguments, falling back to environment variables when available"""
+    parser = argparse.ArgumentParser(description='AWS Monitoring and Jira Ticket Client')
+    
+    # Jira configuration
+    parser.add_argument('--jira-api-token', type=str, 
+                        default=os.environ.get('JIRA_API_TOKEN', ''),
+                        help='Jira API token')
+    parser.add_argument('--jira-username', type=str,
+                        default=os.environ.get('JIRA_USERNAME', ''),
+                        help='Jira username')
+    parser.add_argument('--jira-instance-url', type=str,
+                        default=os.environ.get('JIRA_INSTANCE_URL', ''),
+                        help='Jira instance URL')
+    parser.add_argument('--jira-cloud', type=str,
+                        default=os.environ.get('JIRA_CLOUD', 'True'),
+                        help='Whether Jira is cloud-based (True/False)')
+    parser.add_argument('--project-key', type=str,
+                        default=os.environ.get('PROJECT_KEY', 'ASCRT'),
+                        help='Jira project key')
+    
+    # Model configuration
+    parser.add_argument('--model-id', type=str, default=CLAUDE_3_5_HAIKU,
+                        help='Bedrock model ID')
+    
+    # Python executable path
+    parser.add_argument('--python-path', type=str,
+                        default=sys.executable,
+                        help='Full path to the Python executable')
+    
+    args = parser.parse_args()
+    return args
+
 class MCPClient:
-    def __init__(self):
+    def __init__(self, args):
         # Initialize session and client objects
         self.monitoring_session: Optional[ClientSession] = None
         self.jira_session: Optional[ClientSession] = None
@@ -23,11 +57,29 @@ class MCPClient:
         self.monitoring_system_prompt = None
         self.jira_system_prompt = None
         
+        # Store arguments
+        self.args = args
+        
+        # Set environment variables from args
+        os.environ['JIRA_API_TOKEN'] = args.jira_api_token
+        os.environ['JIRA_USERNAME'] = args.jira_username
+        os.environ['JIRA_INSTANCE_URL'] = args.jira_instance_url
+        os.environ['JIRA_CLOUD'] = args.jira_cloud
+        os.environ['PROJECT_KEY'] = args.project_key
+        
+        # Print startup information
+        print(f"Using Python executable: {args.python_path}")
+        print(f"Jira configuration:")
+        print(f"  - Username: {args.jira_username}")
+        print(f"  - Instance URL: {args.jira_instance_url}")
+        print(f"  - Project Key: {args.project_key}")
+        print(f"  - API Token: {'Configured' if args.jira_api_token else 'Not configured'}")
+        
     async def connect_to_servers(self):
         """Connect to both MCP servers"""
         # Connect to monitoring server
         monitoring_params = StdioServerParameters(
-            command="python",
+            command=self.args.python_path,  # Use full path to Python
             args=[MONTITORING_SCRIPT_PATH]
         )
 
@@ -41,10 +93,19 @@ class MCPClient:
         await self.monitoring_session.initialize()
         print(f"Connected to the AWS Monitoring server")
         
-        # Connect to Jira server
+        # Connect to Jira server with environment variables
+        env_vars = {
+            'JIRA_API_TOKEN': self.args.jira_api_token,
+            'JIRA_USERNAME': self.args.jira_username,
+            'JIRA_INSTANCE_URL': self.args.jira_instance_url,
+            'JIRA_CLOUD': self.args.jira_cloud,
+            'PROJECT_KEY': self.args.project_key
+        }
+        
         jira_params = StdioServerParameters(
-            command="python",
-            args=[DIAGNOSIS_SCRIPT_PATH]
+            command=self.args.python_path,  # Use full path to Python
+            args=[DIAGNOSIS_SCRIPT_PATH],
+            env=env_vars
         )
 
         jira_transport = await self.exit_stack.enter_async_context(stdio_client(jira_params))
@@ -146,7 +207,7 @@ class MCPClient:
         
         try:
             # Create a model instance
-            model = ChatBedrock(model_id=CLAUDE_3_5_HAIKU)
+            model = ChatBedrock(model_id=self.args.model_id)
             
             # Create a ReAct agent with all tools
             agent = create_react_agent(
@@ -224,7 +285,10 @@ class MCPClient:
         await self.exit_stack.aclose()
 
 async def main():
-    client = MCPClient()
+    # Parse arguments
+    args = parse_arguments()
+    
+    client = MCPClient(args)
     try:
         await client.connect_to_servers()
         await client.chat_loop()
