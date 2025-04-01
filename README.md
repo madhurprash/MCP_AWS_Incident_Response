@@ -100,6 +100,8 @@ MCP_AWS_Incident_Response/
         uv run client.py
     ```
 
+    ![run-client](img.png)
+
 - ***This will start an interactive chat interface where you can***:
     - Ask about AWS logs and metrics
     - Request analysis of specific services
