@@ -2,6 +2,8 @@
 
 An intelligent AWS monitoring and incident response solution using `Anthropic's Model Control Protocol` (MCP). This solution empowers users to monitors AWS resources, analyzes CloudWatch logs and metrics for various services (Amazon Bedrock, EC2, IAM, CloudTrail, VPC, RDS, etc), identifies trends, patterns and issues, and creates comprehensive Jira tickets with remediation steps. This eliminates hours of manual analysis and sifting through dashboards and log chunks by interacting with your MCP system in real time in natural language.
 
+#### YouTube demo: https://www.youtube.com/watch?v=BNoEMFc2Rv4
+
 ![diagram](diagram.png)
 
 ## What is Model Context Protocol (MCP)?
