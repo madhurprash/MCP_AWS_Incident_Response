@@ -73,7 +73,7 @@ MCP_AWS_Incident_Response/
 
     ```bash
         git clone https://github.com/madhurprash/AWS_CloudGuardMCP.git
-        cd MCP_AWS_Incident_Response
+        cd AWS_CloudGuardMCP
     ```
 
 1. Set up the Python virtual environment and install dependencies:
