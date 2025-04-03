@@ -105,7 +105,7 @@ MCP_AWS_Incident_Response/
         # this is the MCP client, connects to the servers, lists the available tools
         # and allows a ReACT agent to be run and interact with the server tools based
         # on the user query
-        uv run client.py
+        uv run client.py --model-id=<bedrock-model>
     ```
 
     ![run-client](img.png)
