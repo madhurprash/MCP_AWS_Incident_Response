@@ -122,7 +122,7 @@ You can also use this solution directly with Claude Desktop by adding the follow
 {
   "mcpServers": {
     "aws_monitoring": {
-      "command": "/path/to/your/venv/bin/python3",
+      "command": "/path/to/your/venv/bin/python3 [this is in your virutal environment built from the `uv` commands above]",
       "args": [
         "/path/to/your/repo/server_scripts/monitoring_agent_server.py"
       ],
@@ -135,7 +135,7 @@ You can also use this solution directly with Claude Desktop by adding the follow
       }
     },
     "jira_server": {
-      "command": "/path/to/your/venv/bin/python3",
+      "command": "/path/to/your/venv/bin/python3 [this is in your virutal environment built from the `uv` commands above]",
       "args": [
         "/path/to/your/repo/server_scripts/diagnosis_agent_server.py"
       ],
