@@ -1,10 +1,10 @@
 # AWS Incident Response with MCP Servers
 
-## 🚨 WHAT'S NEW 🚨
+#### 🚨 WHAT'S NEW 🚨
 ---
 **CROSS-ACCOUNT MONITORING NOW AVAILABLE!**
 
-> **New Feature Alert**: You can now monitor and create Jira tickets for resources across multiple AWS accounts! Simply provide your account ID and role name with cross-account access permissions, and the monitoring MCP server will assume that role to fetch data from other accounts.
+> **New Feature Alert**: You can now monitor and create Jira tickets for resources across multiple AWS accounts! Simply provide your account ID and role name with cross-account access permissions once prompted by the host LLM, and the monitoring MCP server will assume that role to fetch data from other accounts.
 >
 > **How it works**:
 > 1. Specify that you want to use cross-account access
@@ -12,9 +12,7 @@
 > 3. Provide the IAM role name with necessary permissions
 > 4. The system automatically handles role assumption and data retrieval
 >
-> This enhancement allows centralized monitoring and incident management across your AWS organization!
-
-
+> This enhancement allows centralized monitoring and incident management across your AWS organization! Build centralized dashboards, custom analysis and more, all through Natural Language.
 
 An intelligent AWS monitoring and incident response solution using `Anthropic's Model Context Protocol` (MCP). This solution empowers users to monitors AWS resources, analyzes CloudWatch logs and metrics for various services (Amazon Bedrock, EC2, IAM, CloudTrail, VPC, RDS, etc), identifies trends, patterns and issues, and creates comprehensive Jira tickets with remediation steps. This eliminates hours of manual analysis and sifting through dashboards and log chunks by interacting with your MCP system in real time in natural language.
 
