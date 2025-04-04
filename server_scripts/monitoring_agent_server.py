@@ -36,24 +36,236 @@ by the other server to take further steps, such as diagnose the issue and then a
 to create tickets.
 """
 
+# Function to create cross-account AWS clients
+def get_cross_account_client(service: str, account_id: int, role_name: Optional[str]):
+    """
+    Creates a boto3 client for the specified service using cross-account role assumption.
+    
+    Args:
+        service (str): AWS service name (e.g., 'logs', 'cloudwatch')
+        account_id (str): AWS account ID to access
+        role_name (str): IAM role name to assume
+        
+    Returns:
+        boto3.client: Service client with assumed role credentials
+    """
+    try:
+        # Convert account_id to string explicitly in case it's passed as a number
+        account_id = str(account_id)
+        role_name = str(role_name)
+        
+        # Create STS client
+        sts_client = boto3.client('sts')
+        current_identity = sts_client.get_caller_identity()
+        print(f"Current identity: {current_identity}")
+        
+        # Define the role ARN
+        role_arn = f"arn:aws:iam::{account_id}:role/{role_name}"
+        print(f"Attempting to assume role: {role_arn}")
+        
+        # Assume the role
+        assumed_role = sts_client.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName="TestCrossAccountSession"
+        )
+        
+        # Extract temporary credentials
+        credentials = assumed_role['Credentials']
+        
+        # Create client with assumed role credentials
+        client = boto3.client(
+            service,
+            aws_access_key_id=credentials['AccessKeyId'],
+            aws_secret_access_key=credentials['SecretAccessKey'],
+            aws_session_token=credentials['SessionToken']
+        )
+        
+        print(f"Successfully created cross-account client for {service} in account {account_id}")
+        return client
+        
+    except Exception as e:
+        print(f"Error creating cross-account client for {service}: {e}")
+        raise e
+
+# Add a dedicated tool for setting up cross-account access
+@monitoring_server.tool()
+def setup_cross_account_access(account_id: int, role_name: Optional[str]) -> Dict[str, Any]:
+    """
+    Sets up cross-account access for CloudWatch monitoring.
+    
+    Args:
+        account_id (str): The AWS account ID to access
+        role_name (str): The IAM role name with necessary permissions
+        
+    Returns:
+        Dict[str, Any]: Status of the cross-account setup
+    """
+    try:
+        test_client = get_cross_account_client('logs', account_id, role_name)
+        test_client.describe_log_groups(limit=1)
+        return {
+            "status": "success",
+            "message": f"Successfully established cross-account access to account {account_id}",
+            "account_id": account_id,
+            "role_name": role_name
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to establish cross-account access: {str(e)}",
+            "account_id": account_id,
+            "role_name": role_name
+        }
+
+# Update list_cloudwatch_dashboards to support cross-account access
+@monitoring_server.tool()
+def list_cloudwatch_dashboards(account_id: Optional[int] = None, role_name: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Lists all CloudWatch dashboards in the AWS account.
+    Supports cross-account access when account_id and role_name are provided.
+
+    Args:
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
+
+    Returns:
+        Dict[str, Any]: A dictionary containing the list of dashboard names and their ARNs.
+    """
+    try:
+        # Create appropriate cloudwatch client based on account access requirements
+        if account_id and role_name:
+            try:
+                cloudwatch_client_to_use = get_cross_account_client('cloudwatch', account_id, role_name)
+                print(f"Using cross-account CloudWatch client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch client: {str(e)}"
+                }
+        else:
+            # Use the default cloudwatch client
+            cloudwatch_client_to_use = cloudwatch_client
+            print("Using default AWS credentials")
+            
+        dashboards = []
+        paginator = cloudwatch_client_to_use.get_paginator('list_dashboards')
+        for page in paginator.paginate():
+            for entry in page.get('DashboardEntries', []):
+                dashboards.append({
+                    'DashboardName': entry.get('DashboardName'),
+                    'DashboardArn': entry.get('DashboardArn')
+                })
+
+        return {
+            'status': 'success',
+            'dashboard_count': len(dashboards),
+            'dashboards': dashboards,
+            'account_context': f"Account ID: {account_id}" if account_id else "Default account"
+        }
+
+    except Exception as e:
+        return {'status': 'error', 'message': str(e)}
+
+# Update get_cloudwatch_alarms_for_service to support cross-account access
+@monitoring_server.tool()
+def get_cloudwatch_alarms_for_service(
+    service_name: str = None, 
+    account_id: Optional[int] = None, 
+    role_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fetches CloudWatch alarms, optionally filtering by service.
+    Supports cross-account access when account_id and role_name are provided.
+    
+    Args:
+        service_name (str, optional): The name of the service to filter alarms for
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
+        
+    Returns:
+        Dictionary with alarm information
+    """
+    try:
+        # Create appropriate cloudwatch client based on account access requirements
+        if account_id and role_name:
+            try:
+                cloudwatch_client_to_use = get_cross_account_client('cloudwatch', account_id, role_name)
+                print(f"Using cross-account CloudWatch client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch client: {str(e)}"
+                }
+        else:
+            # Use the default cloudwatch client
+            cloudwatch_client_to_use = cloudwatch_client
+            print("Using default AWS credentials")
+            
+        response = cloudwatch_client_to_use.describe_alarms()
+        alarms = response.get('MetricAlarms', [])
+        
+        formatted_alarms = []
+        for alarm in alarms:
+            namespace = alarm.get('Namespace', '').lower()
+            
+            # Filter by service if provided
+            if service_name and service_name.lower() not in namespace:
+                continue
+                
+            formatted_alarms.append({
+                'name': alarm.get('AlarmName'),
+                'state': alarm.get('StateValue'),
+                'metric': alarm.get('MetricName'),
+                'namespace': alarm.get('Namespace')
+            })
+        
+        return {
+            "alarm_count": len(formatted_alarms),
+            "alarms": formatted_alarms,
+            "account_context": f"Account ID: {account_id}" if account_id else "Default account"
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @monitoring_server.tool()
 def fetch_cloudwatch_logs_for_service(
     service_name: str,
     days: int = 3,
-    filter_pattern: str = ""
+    filter_pattern: str = "",
+    account_id: Optional[int] = None,
+    role_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Fetches CloudWatch logs for a specified service for the given number of days.
+    Supports cross-account access when account_id and role_name are provided.
     
     Args:
         service_name (str): The name of the service to fetch logs for (e.g., "ec2", "lambda", "rds")
         days (int): Number of days of logs to fetch (default: 3)
         filter_pattern (str): Optional CloudWatch Logs filter pattern
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
         
     Returns:
         Dictionary with log groups and their recent log events
     """
     try:
+        # Create appropriate logs client based on account access requirements
+        if account_id and role_name:
+            try:
+                logs_client_to_use = get_cross_account_client('logs', account_id, role_name)
+                print(f"Using cross-account CloudWatch Logs client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch Logs client: {str(e)}"
+                }
+        else:
+            # Use the default logs client
+            logs_client_to_use = logs_client
+            print("Using default AWS credentials")
+            
+        # Create dynamic service mapping for any service
         service_log_prefixes = {
         "ec2": ["/aws/ec2", "/var/log"],
         "lambda": ["/aws/lambda"],
@@ -67,20 +279,45 @@ def fetch_cloudwatch_logs_for_service(
         "bedrock": [f"/aws/bedrock/modelinvocations"],
         "iam": ["/aws/dummy-security-logs"] 
         }
+        
+        # If service_name is not in our predefined mapping, create a dynamic mapping
+        if service_name.lower() not in service_log_prefixes:
+            # Try various prefixes for the requested service
+            dynamic_prefixes = [
+                f"/aws/{service_name.lower()}",
+                f"/aws/{service_name.lower()}/",
+                f"/{service_name.lower()}",
+                f"/var/log/{service_name.lower()}"
+            ]
+            service_log_prefixes[service_name.lower()] = dynamic_prefixes
+            print(f"Created dynamic mapping for service: {service_name} with prefixes: {dynamic_prefixes}")
 
-        # Default to searching all log groups if service isn't in our mapping
+        # Get the prefixes for the requested service
         prefixes = service_log_prefixes.get(service_name.lower(), [""])
         print(f"Fetching logs for the service: {prefixes}")
         
         # Find all log groups for this service
         log_groups = []
         for prefix in prefixes:
-            paginator = logs_client.get_paginator('describe_log_groups')
+            paginator = logs_client_to_use.get_paginator('describe_log_groups')
             for page in paginator.paginate(logGroupNamePrefix=prefix):
                 log_groups.extend([group['logGroupName'] for group in page['logGroups']])
         
+        # If no log groups found with the prefixes, try a generic search
         if not log_groups:
-            return {"status": "warning", "message": f"No log groups found for service: {service_name}"}
+            # Try to find any log group that might contain the service name
+            paginator = logs_client_to_use.get_paginator('describe_log_groups')
+            for page in paginator.paginate():
+                for group in page['logGroups']:
+                    if service_name.lower() in group['logGroupName'].lower():
+                        log_groups.append(group['logGroupName'])
+                        
+        if not log_groups:
+            return {
+                "status": "warning", 
+                "message": f"No log groups found for service: {service_name}",
+                "account_context": f"Account ID: {account_id}" if account_id else "Default account"
+            }
         
         # Calculate time range
         end_time = datetime.utcnow()
@@ -95,14 +332,14 @@ def fetch_cloudwatch_logs_for_service(
         # Iterate through log groups and fetch log events
         for log_group in log_groups:
             try:
-                # First get log streams
-                response = logs_client.describe_log_streams(
+                # First get log streams - IMPORTANT: Use logs_client_to_use instead of logs_client here
+                response = logs_client_to_use.describe_log_streams(
                     logGroupName=log_group,
                     orderBy='LastEventTime',
                     descending=True,
                     limit=5  # Get the 5 most recent streams
                 )
-                print(f"fetching logs for log group {log_group}: {response}")
+                print(f"Fetching logs for log group {log_group}: {response}")
                 streams = response.get('logStreams', [])
                 
                 if not streams:
@@ -117,7 +354,7 @@ def fetch_cloudwatch_logs_for_service(
                     
                     # If filter pattern is provided, use filter_log_events
                     if filter_pattern:
-                        filter_response = logs_client.filter_log_events(
+                        filter_response = logs_client_to_use.filter_log_events(
                             logGroupName=log_group,
                             logStreamNames=[stream_name],
                             startTime=start_time_ms,
@@ -128,7 +365,7 @@ def fetch_cloudwatch_logs_for_service(
                         events = filter_response.get('events', [])
                     else:
                         # Otherwise use get_log_events
-                        log_response = logs_client.get_log_events(
+                        log_response = logs_client_to_use.get_log_events(
                             logGroupName=log_group,
                             logStreamName=stream_name,
                             startTime=start_time_ms,
@@ -163,91 +400,51 @@ def fetch_cloudwatch_logs_for_service(
             "service": service_name,
             "time_range": f"{start_time.isoformat()} to {end_time.isoformat()}",
             "log_groups_count": len(log_groups),
-            "log_groups": results
+            "log_groups": results,
+            "account_context": f"Account ID: {account_id}" if account_id else "Default account"
         }
         
     except Exception as e:
         print(f"Error fetching logs for service {service_name}: {e}")
         return {"status": "error", "message": str(e)}
-    
+
+# Update get_dashboard_summary to support cross-account access
 @monitoring_server.tool()
-def list_cloudwatch_dashboards() -> Dict[str, Any]:
-    """
-    Lists all CloudWatch dashboards in the AWS account.
-
-    Returns:
-        Dict[str, Any]: A dictionary containing the list of dashboard names and their ARNs.
-    """
-    try:
-        dashboards = []
-        paginator = cloudwatch_client.get_paginator('list_dashboards')
-        for page in paginator.paginate():
-            for entry in page.get('DashboardEntries', []):
-                dashboards.append({
-                    'DashboardName': entry.get('DashboardName'),
-                    'DashboardArn': entry.get('DashboardArn')
-                })
-
-        return {
-            'status': 'success',
-            'dashboard_count': len(dashboards),
-            'dashboards': dashboards
-        }
-
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
-
-@monitoring_server.tool()
-def get_cloudwatch_alarms_for_service(service_name: str = None) -> Dict[str, Any]:
-    """
-    Fetches CloudWatch alarms, optionally filtering by service.
-    
-    Args:
-        service_name (str, optional): The name of the service to filter alarms for
-        
-    Returns:
-        Dictionary with alarm information
-    """
-    try:
-        response = cloudwatch_client.describe_alarms()
-        alarms = response.get('MetricAlarms', [])
-        
-        formatted_alarms = []
-        for alarm in alarms:
-            namespace = alarm.get('Namespace', '').lower()
-            
-            # Filter by service if provided
-            if service_name and service_name.lower() not in namespace:
-                continue
-                
-            formatted_alarms.append({
-                'name': alarm.get('AlarmName'),
-                'state': alarm.get('StateValue'),
-                'metric': alarm.get('MetricName'),
-                'namespace': alarm.get('Namespace')
-            })
-        
-        return {
-            "alarm_count": len(formatted_alarms),
-            "alarms": formatted_alarms
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-@monitoring_server.tool()
-def get_dashboard_summary(dashboard_name: str) -> Dict[str, Any]:
+def get_dashboard_summary(
+    dashboard_name: str,
+    account_id: Optional[int] = None, 
+    role_name: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Retrieves and summarizes the configuration of a specified CloudWatch dashboard.
+    Supports cross-account access when account_id and role_name are provided.
 
     Args:
-        dashboard_name (str): The name of the CloudWatch dashboard.
+        dashboard_name (str): The name of the CloudWatch dashboard
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
 
     Returns:
         Dict[str, Any]: A summary of the dashboard's widgets and their configurations.
     """
     try:
+        # Create appropriate cloudwatch client based on account access requirements
+        if account_id and role_name:
+            try:
+                cloudwatch_client_to_use = get_cross_account_client('cloudwatch', account_id, role_name)
+                print(f"Using cross-account CloudWatch client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch client: {str(e)}"
+                }
+        else:
+            # Use the default cloudwatch client
+            cloudwatch_client_to_use = cloudwatch_client
+            print("Using default AWS credentials")
+            
         # Fetch the dashboard configuration
-        response = cloudwatch_client.get_dashboard(DashboardName=dashboard_name)
+        response = cloudwatch_client_to_use.get_dashboard(DashboardName=dashboard_name)
         dashboard_body = response.get('DashboardBody', '{}')
         dashboard_config = json.loads(dashboard_body)
 
@@ -267,26 +464,50 @@ def get_dashboard_summary(dashboard_name: str) -> Dict[str, Any]:
         return {
             'dashboard_name': dashboard_name,
             'widgets_count': len(widgets_summary),
-            'widgets_summary': widgets_summary
+            'widgets_summary': widgets_summary,
+            'account_context': f"Account ID: {account_id}" if account_id else "Default account"
         }
 
     except Exception as e:
         return {'status': 'error', 'message': str(e)}
 
+# Update list_log_groups to support cross-account access
 @monitoring_server.tool()
-def list_log_groups(prefix: str = "") -> Dict[str, Any]:
+def list_log_groups(
+    prefix: str = "",
+    account_id: Optional[int] = None, 
+    role_name: Optional[str] = None
+) -> Dict[str, Any]:
     """
     Lists all CloudWatch log groups, optionally filtered by a prefix.
+    Supports cross-account access when account_id and role_name are provided.
     
     Args:
         prefix (str, optional): Optional prefix to filter log groups
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
         
     Returns:
         Dictionary with list of log groups and their details
     """
     try:
+        # Create appropriate logs client based on account access requirements
+        if account_id and role_name:
+            try:
+                logs_client_to_use = get_cross_account_client('logs', account_id, role_name)
+                print(f"Using cross-account CloudWatch Logs client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch Logs client: {str(e)}"
+                }
+        else:
+            # Use the default logs client
+            logs_client_to_use = logs_client
+            print("Using default AWS credentials")
+            
         log_groups = []
-        paginator = logs_client.get_paginator('describe_log_groups')
+        paginator = logs_client_to_use.get_paginator('describe_log_groups')
         
         # Use the prefix if provided, otherwise get all log groups
         if prefix:
@@ -313,33 +534,55 @@ def list_log_groups(prefix: str = "") -> Dict[str, Any]:
         return {
             "status": "success",
             "group_count": len(log_groups),
-            "log_groups": log_groups
+            "log_groups": log_groups,
+            "account_context": f"Account ID: {account_id}" if account_id else "Default account"
         }
         
     except Exception as e:
         print(f"Error listing log groups: {e}")
         return {"status": "error", "message": str(e)}
 
+# Update analyze_log_group to support cross-account access
 @monitoring_server.tool()
 def analyze_log_group(
     log_group_name: str,
     days: int = 1,
     max_events: int = 1000,
-    filter_pattern: str = ""
+    filter_pattern: str = "",
+    account_id: Optional[int] = None, 
+    role_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Analyzes a specific CloudWatch log group and provides insights.
+    Supports cross-account access when account_id and role_name are provided.
     
     Args:
         log_group_name (str): The name of the log group to analyze
         days (int): Number of days of logs to analyze (default: 1)
         max_events (int): Maximum number of events to retrieve (default: 1000)
         filter_pattern (str): Optional CloudWatch Logs filter pattern
+        account_id (str, optional): AWS account ID for cross-account access
+        role_name (str, optional): IAM role name to assume for cross-account access
         
     Returns:
         Dictionary with analysis and insights about the log group
     """
     try:
+        # Create appropriate logs client based on account access requirements
+        if account_id and role_name:
+            try:
+                logs_client_to_use = get_cross_account_client('logs', account_id, role_name)
+                print(f"Using cross-account CloudWatch Logs client for account {account_id}")
+            except Exception as e:
+                return {
+                    "status": "error", 
+                    "message": f"Failed to create cross-account CloudWatch Logs client: {str(e)}"
+                }
+        else:
+            # Use the default logs client
+            logs_client_to_use = logs_client
+            print("Using default AWS credentials")
+            
         # Calculate time range
         end_time = datetime.utcnow()
         start_time = end_time - timedelta(days=days)
@@ -352,7 +595,7 @@ def analyze_log_group(
         print(f"Time range: {start_time.isoformat()} to {end_time.isoformat()}")
         
         # Get log streams
-        streams_response = logs_client.describe_log_streams(
+        streams_response = logs_client_to_use.describe_log_streams(
             logGroupName=log_group_name,
             orderBy='LastEventTime',
             descending=True,
@@ -363,7 +606,8 @@ def analyze_log_group(
         if not streams:
             return {
                 "status": "info",
-                "message": f"No log streams found in log group: {log_group_name}"
+                "message": f"No log streams found in log group: {log_group_name}",
+                "account_context": f"Account ID: {account_id}" if account_id else "Default account"
             }
         
         # Collect events from all streams
@@ -375,7 +619,7 @@ def analyze_log_group(
             
             # If filter pattern is provided, use filter_log_events
             if filter_pattern:
-                filter_response = logs_client.filter_log_events(
+                filter_response = logs_client_to_use.filter_log_events(
                     logGroupName=log_group_name,
                     logStreamNames=[stream_name],
                     startTime=start_time_ms,
@@ -386,7 +630,7 @@ def analyze_log_group(
                 events = filter_response.get('events', [])
             else:
                 # Otherwise use get_log_events
-                log_response = logs_client.get_log_events(
+                log_response = logs_client_to_use.get_log_events(
                     logGroupName=log_group_name,
                     logStreamName=stream_name,
                     startTime=start_time_ms,
@@ -457,7 +701,8 @@ def analyze_log_group(
         return {
             "status": "success",
             "log_group": log_group_name,
-            "insights": insights
+            "insights": insights,
+            "account_context": f"Account ID: {account_id}" if account_id else "Default account"
         }
         
     except Exception as e:
@@ -471,6 +716,14 @@ def analyze_aws_logs() -> str:
     return """
     You are the monitoring agent responsible for analyzing AWS resources, including CloudWatch logs, alarms, and dashboards. Your tasks include:
 
+    IMPORTANT:
+        Follow the instructions carefully and use the tools as needed:
+        - Your first question should be to ask the user for which account they want to monitor: their own or a cross-account.
+        - If the user says "my account", use the default account.
+        - If the user says "cross account", ask for the account_id and role_name to assume the role in that account.
+        - If the user doesn't provide an account, always ask for this.
+        - use the account id and role_name parameters in the tools you call as strings if provided.
+        
     1. **List Available CloudWatch Dashboards:**
        - Utilize the `list_cloudwatch_dashboards` tool to retrieve a list of all CloudWatch dashboards in the AWS account.
        - Provide the user with the names and descriptions of these dashboards, offering a brief overview of their purpose and contents.
@@ -491,22 +744,35 @@ def analyze_aws_logs() -> str:
        - Provide insights into the dashboard's focus areas and how it can be utilized for monitoring specific aspects of the AWS environment.
     
     5. **List and Explore CloudWatch Log Groups:**
-   - Use the `list_log_groups` tool to retrieve all available CloudWatch log groups in the AWS account.
-   - Help the user navigate through these log groups and understand their purpose.
-   - When a user is interested in a specific log group, explain its contents and how to extract relevant information.
+       - Use the `list_log_groups` tool to retrieve all available CloudWatch log groups in the AWS account.
+       - Help the user navigate through these log groups and understand their purpose.
+       - When a user is interested in a specific log group, explain its contents and how to extract relevant information.
    
-   6. **Analyze Specific Log Groups in Detail:**
-   - When a user wants to gain insights about a specific log group, use the `analyze_log_group` tool.
-   - Summarize key metrics like event count, error rates, and time distribution.
-   - Identify common patterns and potential issues based on log content.
-   - Provide actionable recommendations based on the observed patterns and error trends.
+    6. **Analyze Specific Log Groups in Detail:**
+       - When a user wants to gain insights about a specific log group, use the `analyze_log_group` tool.
+       - Summarize key metrics like event count, error rates, and time distribution.
+       - Identify common patterns and potential issues based on log content.
+       - Provide actionable recommendations based on the observed patterns and error trends.
+
+    7. **Cross-Account Access:**
+       - Support monitoring of resources across multiple AWS accounts
+       - When users mention a specific account or ask for cross-account monitoring, ask them for:
+           * The AWS account ID (12-digit number)
+           * The IAM role name with necessary CloudWatch permissions 
+       - Use the `setup_cross_account_access` tool to verify access before proceeding
+       - Pass the account_id and role_name parameters to the appropriate tools
+       - Always include account context information in your analysis and reports
+       - If there are issues with cross-account access, explain them clearly to the user
 
     **Guidelines:**
 
-    - Always begin by listing the available CloudWatch dashboards to inform the user of existing monitoring setups.
+    - Always begin by asking the USER FOR WHICH ACCOUNT THEY WANT TO MONITOR: THEIR OWN ACCOUNT OR A CROSS-ACCOUNT.
+    - If the user wants to monitor their own account, use the default AWS credentials.
+    - If the user wants to monitor a cross-account, ask for the account ID and role name ALWAYS. 
     - When analyzing logs or alarms, be thorough yet concise, ensuring clarity in your reporting.
     - Avoid making assumptions; base your analysis strictly on the data retrieved from AWS tools.
     - Clearly explain the available AWS services and their monitoring capabilities when prompted by the user.
+    - For cross-account access, if the user mentions another account but doesn't provide the account ID or role name, ask for these details before proceeding.
 
     **Available AWS Services for Monitoring:**
 
@@ -521,6 +787,20 @@ def analyze_aws_logs() -> str:
     - **WAF Web Security** [waf]
     - **Bedrock** [bedrock/generative AI]
     - **IAM Logs** [iam] (Use this option when users inquire about security logs or events.)
+    - Any other AWS service the user requests - the system will attempt to create a dynamic mapping
+
+    **Cross-Account Monitoring Instructions:**
+    
+    When a user wants to monitor resources in a different AWS account:
+    1. Ask for the AWS account ID (12-digit number)
+    2. Ask for the IAM role name with necessary permissions
+    3. Use the `setup_cross_account_access` tool to verify the access works
+    4. If successful, use the account_id and role_name parameters with the monitoring tools
+    5. Always specify which account you're reporting on in your analysis
+    6. If cross-account access fails, provide the error message and suggest checking:
+       - That the role exists in the target account
+       - That the role has the necessary permissions
+       - That the role's trust policy allows your account to assume it
 
     Your role is to assist users in monitoring and analyzing their AWS resources effectively, providing actionable insights based on the data available.
     """

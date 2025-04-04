@@ -184,7 +184,16 @@ class MCPClient:
         
         # Combine the system prompts
         combined_system_prompt = f"""
-        You are an AWS Monitoring and Jira Ticket Agent with access to multiple tools.
+        You are an AWS Monitoring and Jira Ticket Agent with access to multiple tools. 
+        
+        IMPORTANT:
+        Follow the instructions carefully and use the tools as needed:
+        - Your first question should be to ask the user for which account they want to monitor: their own or a cross-account.
+        - If the user says "my account", use the default account.
+        - If the user says "cross account", ask for the account_id and role_name to assume the role in that account.
+        - If the user doesn't provide an account, always ask for this.
+        - Use the account id and role_name parameters in the tools you call as strings if provided.
+        - CONVERT THE ACCOUNT_ID AND ROLE_NAME TO STRING VALUES BEFORE PASSING THEM TO THE TOOLS.
         
         MONITORING CAPABILITIES:
         {self.monitoring_system_prompt}
@@ -192,9 +201,14 @@ class MCPClient:
         JIRA TICKET CREATION CAPABILITIES:
         {self.jira_system_prompt}
         
+        First, if the user asks for monitoring information in AWS, ask the user always to provide which account.
+        If the users says "my account", then use the default account. If the user says another account, then use the account_id and 
+        the role_name to assume the role in that account. Always ask for the account id and role name if the user says CROSS ACCOUNT.
+        If the user doesn't provide an account, then ALWAYS ask the user for this.
+        Once the user provides this, use the setup_cross_account_access tool to assume the role.
+        
         You should first analyze CloudWatch logs and alarms using the monitoring tools.
-        If you identify issues, USE THE SEARCH_AWS_REMEDIATION TOOL FIRST to find official AWS remediation solutions,
-        and THEN use create_jira_issue tool to create a ticket that includes these AWS-recommended steps.
+        THEN use create_jira_issue tool to create a ticket that includes these AWS-recommended steps.
         
         IMPORTANT: Always create comprehensive tickets that include all information found during monitoring 
         and the AWS remediation steps found via search_aws_remediation. When the user says "create a JIRA ticket", 
@@ -206,8 +220,8 @@ class MCPClient:
         3. Create the JIRA ticket using create_jira_issue, including the remediation steps from step 2
         
         Available tools:
-        - Monitoring tools: list_cloudwatch_dashboards, fetch_cloudwatch_logs_for_service, get_cloudwatch_alarms_for_service, get_dashboard_summary
-        - Jira tools: search_aws_remediation, create_jira_issue
+        - Monitoring tools: setup_cross_account_access, list_cloudwatch_dashboards, fetch_cloudwatch_logs_for_service, get_cloudwatch_alarms_for_service, get_dashboard_summary
+        - Jira tools: create_jira_issue
         
         The user MUST EXPLICITLY ask you to create a ticket, don't create tickets unprompted.
         """
@@ -266,8 +280,9 @@ class MCPClient:
         print("\nAWS Monitoring and Jira Ticket Client Started!")
         print("Type your queries or 'quit' to exit.")
         print("\nExample queries you can try:")
-        print("- Show me the CloudWatch logs for EC2 in the last 24 hours")
+        print("- List some of the logs in my account")
         print("- Check if there are any errors in the Lambda logs")
+        print("- Are there any alarms in the CloudWatch logs?")
         print("- Create a Jira ticket for the S3 access denied issues")
         print("- What remediation steps does AWS recommend for RDS performance issues?")
 
