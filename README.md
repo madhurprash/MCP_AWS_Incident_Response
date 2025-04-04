@@ -1,6 +1,6 @@
 # AWS Incident Response with MCP Servers
 
-### ***🚨 WHAT'S NEW 🚨***
+#### 🚨 WHAT'S NEW 🚨
 ---
 ***CROSS-ACCOUNT MONITORING NOW AVAILABLE!***
 
