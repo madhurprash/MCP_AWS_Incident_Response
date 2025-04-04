@@ -2,7 +2,7 @@
 
 #### 🚨 WHAT'S NEW 🚨
 ---
-**CROSS-ACCOUNT MONITORING NOW AVAILABLE!**
+***CROSS-ACCOUNT MONITORING NOW AVAILABLE!***
 
 > **New Feature Alert**: You can now monitor and create Jira tickets for resources across multiple AWS accounts! Simply provide your account ID and role name with cross-account access permissions once prompted by the host LLM, and the monitoring MCP server will assume that role to fetch data from other accounts.
 >
