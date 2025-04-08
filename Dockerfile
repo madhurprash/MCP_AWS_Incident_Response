@@ -20,4 +20,4 @@ RUN mkdir -p /root/.aws
 EXPOSE 8000
 
 # Entry point with selectable server script
-ENTRYPOINT ["python", "server_scripts/monitoring_server.py"]
+ENTRYPOINT ["python"]
