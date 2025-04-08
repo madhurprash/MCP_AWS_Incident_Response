@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP, Context
 # Create MCP server for Jira ticket creation
 jira_server = FastMCP("AWS-Jira-Tickets-Server")
 
+
 # Get Jira configuration from environment variables
 JIRA_API_TOKEN = os.environ.get("JIRA_API_TOKEN")
 JIRA_USERNAME = os.environ.get("JIRA_USERNAME")
