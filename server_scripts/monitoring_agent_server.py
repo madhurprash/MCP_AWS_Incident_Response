@@ -13,18 +13,17 @@ from mcp.server.fastmcp import FastMCP, Context
 monitoring_server = FastMCP("AWS-Monitoring-Server")
 
 boto3_session = boto3.session.Session()
-region = boto3_session.region_name
 
 
 # Initialize AWS clients
 # Define boto3 and AWS clients
-cloudwatch_client = boto3.client('cloudwatch', region_name=region) 
-cloudtrail_client = boto3.client('cloudtrail', region_name=region)
-logs_client = boto3.client('logs', region_name=region)
-xray_client = boto3.client('xray', region_name=region)
-autoscaling_client = boto3.client('autoscaling', region_name=region)
-ec2_client = boto3.client('ec2', region_name=region)
-health_client = boto3.client('health', region_name=region)
+cloudwatch_client = boto3.client('cloudwatch', region_name=boto3.Session().region_name) 
+cloudtrail_client = boto3.client('cloudtrail', region_name=boto3.Session().region_name)
+logs_client = boto3.client('logs', region_name=boto3.Session().region_name)
+xray_client = boto3.client('xray', region_name=boto3.Session().region_name)
+autoscaling_client = boto3.client('autoscaling', region_name=boto3.Session().region_name)
+ec2_client = boto3.client('ec2', region_name=boto3.Session().region_name)
+health_client = boto3.client('health', region_name=boto3.Session().region_name)
 BEDROCK_LOG_GROUP = os.environ.get("BEDROCK_LOG_GROUP", "bedrockloggroup")
 
 
