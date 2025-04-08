@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from mcp.server.fastmcp import FastMCP, Context
 
+aws_region = os.environ.get("AWS_REGION", "us-east-1")
+print(f"The aws region is: {aws_region}")
+
 # Create MCP server
 # This monitoring server contains information about the cloudwatch logs
 # in a user's AWS account. It will be able to fetch recent logs
@@ -15,13 +18,13 @@ monitoring_server = FastMCP("AWS-Monitoring-Server")
 
 # Initialize AWS clients
 # Define boto3 and AWS clients
-cloudwatch_client = boto3.client('cloudwatch') 
-cloudtrail_client = boto3.client('cloudtrail')
-logs_client = boto3.client('logs')
-xray_client = boto3.client('xray')
-autoscaling_client = boto3.client('autoscaling')
-ec2_client = boto3.client('ec2')
-health_client = boto3.client('health')
+cloudwatch_client = boto3.client('cloudwatch', region_name=aws_region) 
+cloudtrail_client = boto3.client('cloudtrail', region_name=aws_region)
+logs_client = boto3.client('logs', region_name=aws_region)
+xray_client = boto3.client('xray', region_name=aws_region)
+autoscaling_client = boto3.client('autoscaling', region_name=aws_region)
+ec2_client = boto3.client('ec2', region_name=aws_region)
+health_client = boto3.client('health', region_name=aws_region)
 BEDROCK_LOG_GROUP = os.environ.get("BEDROCK_LOG_GROUP", "bedrockloggroup")
 
 
