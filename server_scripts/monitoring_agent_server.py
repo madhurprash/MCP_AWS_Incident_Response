@@ -552,7 +552,6 @@ def list_log_groups(
 def analyze_log_group(
     log_group_name: str,
     days: int = 1,
-    max_events: int = 1000,
     filter_pattern: str = "",
     account_id: Optional[int] = None, 
     role_name: Optional[str] = None
@@ -564,7 +563,6 @@ def analyze_log_group(
     Args:
         log_group_name (str): The name of the log group to analyze
         days (int): Number of days of logs to analyze (default: 1)
-        max_events (int): Maximum number of events to retrieve (default: 1000)
         filter_pattern (str): Optional CloudWatch Logs filter pattern
         account_id (str, optional): AWS account ID for cross-account access
         role_name (str, optional): IAM role name to assume for cross-account access
@@ -573,6 +571,8 @@ def analyze_log_group(
         Dictionary with analysis and insights about the log group
     """
     try:
+        # hardcoding max events because bedrock agents limit for tool parameters is 5
+        max_events: int = 1000
         # Create appropriate logs client based on account access requirements
         if account_id and role_name:
             try:
